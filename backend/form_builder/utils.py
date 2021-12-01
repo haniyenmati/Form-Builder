@@ -15,3 +15,4 @@ class QuestionTypes(TextChoices):
     Phone_Number = 'phone-no', "Phone No."
     Number = 'number', "Number"
     File = 'file', "File"
+

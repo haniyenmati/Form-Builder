@@ -1,14 +1,29 @@
-from django.db import models
+from django.db import models, IntegrityError
 from django.utils.text import slugify
 from django.db.models import F
 from django.core.validators import ValidationError
 from accounts.models import Business
 from .utils import PhoneNumberValidator, QuestionTypes
-from .baseClasses import AbstractBaseQuestion
 
 
 class Form(models.Model):
+    """
+        a db table includes a business as foreignkey and some other details.
+        title: [unique for other forms which belong to a business] a title.
+        description: [not nullable] the form description, nothing much.
+        business : [foreignkey] the form owner.
+        slug : [unique, auto-generated] is being used for lookup_field to view each form and is auto generated.
+        form_template: [restricted with defined choices] for specifying a form template and visuals.
+        created_date: [auto-generated] is being set, whenever a form instance is created.
+        owner_is_anonymous: [boolean] if true whoever fills this form, can do it anonymously; otherwise has to enter
+        their email.
+        is_closed: [boolean, default=false] if a form is closed, it will not accept any responses.
+    """
+
     class FormTemplates(models.TextChoices):
+        """
+            a class for choosing form template from a set of defined templates.
+        """
         BLANK = 'blank', "BLANK"
         CV = 'cv', "CV"
         QUIZ = 'quiz', "QUIZ"
@@ -23,67 +38,89 @@ class Form(models.Model):
     owner_is_anonymous = models.BooleanField(default=True)
     is_closed = models.BooleanField(default=False)
 
+    def add_question(self, question):
+        try:
+            self.questions.add(question)
+        except Exception as err:
+            raise ValidationError({"error": f'{err}'})
+        else:
+            return self.questions.all()
+
     def save(self, *args, **kwargs):
-        self.slug = slugify(f'{self.id}-{self.title}')
-        return super().save(*args, **kwargs)
+        """
+            auto generating slug.
+            if the generated slug is not unique, it means there exists a form with title in the related business forms.
+            so it raise exception.
+        """
+        try:
+            self.slug = slugify(f'{self.business.pk}-{self.title}')
+            return super().save(*args, **kwargs)
+        except IntegrityError:
+            raise ValidationError({"error": "a form with this title already exists in your forms list."})
 
     def __str__(self):
         return self.slug
 
 
-class Question(AbstractBaseQuestion):
+class Question(models.Model):
+    """
+        a db table includes a form as foreignkey and some other details.
+        answer_type: [restricted with defined choices] there are some defined types as QuestionTypes.
+        form: [foreignkey] each question belongs to a form.
+        question_body: the question text.
+        related_image: [nullable] each question can have a attached image.
+    """
     answer_type = models.CharField(max_length=20, choices=QuestionTypes.choices)
     is_required = models.BooleanField(default=False)
     form = models.ForeignKey(Form, on_delete=models.CASCADE, related_name='questions')
-
-    def is_valid(self):
-        """
-        TODO checks out if all with same types questions in the related form has unique question body.
-        """
-
-    @property
-    def multi_choices_with_choices(self):
-        if self.answer_type == QuestionTypes.MultipleChoice:
-            return self.objects.values(self.choices, question=F('question_body'))
-        raise TypeError('non multi choice questions does not have this option')
+    question_body = models.CharField(max_length=256)
+    related_image = models.ImageField(null=True, blank=True, upload_to='media/question_related_images')
 
     def __str__(self):
         return self.question_body
+
+    @property
+    def multi_choices_with_choices(self):
+        """
+            displays multi choice questions with their choices.
+        """
+        if self.answer_type == QuestionTypes.MultipleChoice:
+            return self.objects.values(self.choices, question=F('question_body'))
+        raise ValidationError({'error': 'non multi choice questions does not have this option'})
 
 
 class Response(models.Model):
     related_form = models.ForeignKey(Form, on_delete=models.SET('deleted-form'), related_name='responses')
     owner_email = models.EmailField(null=True)
 
-    def is_valid(self):
-        """ TODO checks out if all required questions are answered"""
-
-    def save(self, *args, **kwargs):
-        if (not self.related_form.owner_is_anonymous) and (self.owner_email is None):
-            raise ValueError('form is not accepting anonymous owner. email required')
-        return super().save(*args, **kwargs)
-
     @property
     def all_answers(self):
-        longs = self.long_answers.values(question_id=F('related_question_id'), question=F('related_question__question_body'),
+        longs = self.long_answers.values(question_id=F('related_question_id'),
+                                         question=F('related_question__question_body'),
                                          answer_type=F('related_question__answer_type'),
                                          answer=F('answer_field'))
-        shorts = self.short_answers.values(question_id=F('related_question_id'), question=F('related_question__question_body'),
-                                         answer_type=F('related_question__answer_type'),
-                                         answer=F('answer_field'))
-        multi_choices = self.multichoice_answers.values(question_id=F('related_question_id'),question=F('related_question__question_body'),
-                                                        answer_type=F('related_question__answer_type'),
-                                                        answer=F('answer_field__title'))
-        emails = self.email_answers.values(question_id=F('related_question_id'),question=F('related_question__question_body'),
+        shorts = self.short_answers.values(question_id=F('related_question_id'),
+                                           question=F('related_question__question_body'),
                                            answer_type=F('related_question__answer_type'),
                                            answer=F('answer_field'))
-        phone_nums = self.phonenum_answers.values(question_id=F('related_question_id'),question=F('related_question__question_body'),
+        multi_choices = self.multichoice_answers.values(question_id=F('related_question_id'),
+                                                        question=F('related_question__question_body'),
+                                                        answer_type=F('related_question__answer_type'),
+                                                        answer=F('answer_field__title'))
+        emails = self.email_answers.values(question_id=F('related_question_id'),
+                                           question=F('related_question__question_body'),
+                                           answer_type=F('related_question__answer_type'),
+                                           answer=F('answer_field'))
+        phone_nums = self.phonenum_answers.values(question_id=F('related_question_id'),
+                                                  question=F('related_question__question_body'),
                                                   answer_type=F('related_question__answer_type'),
                                                   answer=F('answer_field'))
-        nums = self.number_answers.values(question_id=F('related_question_id'),question=F('related_question__question_body'),
+        nums = self.number_answers.values(question_id=F('related_question_id'),
+                                          question=F('related_question__question_body'),
                                           answer_type=F('related_question__answer_type'),
                                           answer=F('answer_field'))
-        files = self.file_answers.values(question_id=F('related_question_id'),question=F('related_question__question_body'),
+        files = self.file_answers.values(question_id=F('related_question_id'),
+                                         question=F('related_question__question_body'),
                                          answer_type=F('related_question__answer_type'),
                                          answer=F('answer_field'))
         return longs.union(shorts, multi_choices, emails, phone_nums, nums, files)
@@ -91,6 +128,11 @@ class Response(models.Model):
     @property
     def all_answered_questions_body(self):
         return self.all_answers.values_list('question', flat=True)
+
+    def save(self, *args, **kwargs):
+        if (not self.related_form.owner_is_anonymous) and (self.owner_email is None):
+            raise ValidationError({'error': 'form is not accepting anonymous owner. email required'})
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return self.owner_email
@@ -100,11 +142,11 @@ class Answer(models.Model):
 
     def save(self, *args, **kwargs):
         if self.related_question.is_required and (self.answer_field is None):
-            raise ValueError('answer is required')
+            raise ValidationError({'error': 'answer is required'})
         return super().save(*args, **kwargs)
 
     def is_valid(self):
-        if self.related_question.question_body in self.related_response.all_answered_questions_body:
+        if self.related_question.id in self.related_response.all_answered_questions_body:
             return False  # it has been answered before in this response
         return True
 
@@ -120,10 +162,10 @@ class LongAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Long:
-                raise ValueError(
-                    f'answer type has to be {self.related_question.answer_type}, but Long Answer was given!')
+                raise ValidationError(
+                    {'error': f'answer type has to be {self.related_question.answer_type}, but Long Answer was given!'})
             return super().save(*args, **kwargs)
-        raise ValidationError('this question has been answered before in this response.')
+        raise ValidationError({'error': 'this question has been answered before in this response.'})
 
     def __str__(self):
         return self.answer_field
@@ -137,12 +179,13 @@ class ShortAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Short:
-                raise ValueError(f'answer type has to be {self.related_question.answer_type}, but Short Answer was given!')
+                raise ValidationError(
+                    {'error': f'answer type has to be {self.related_question.answer_type}, but Short Answer was given!'})
             return super().save(*args, **kwargs)
-        raise ValidationError('this question has been answered before in this response.')
+        raise ValidationError({'error': 'this question has been answered before in this response.'})
 
     def __str__(self):
-        return self.answer_field
+        return f'{self.answer_field}'
 
 
 class Choices(models.Model):
@@ -153,8 +196,8 @@ class Choices(models.Model):
 
     def save(self, *args, **kwargs):
         if self.related_question.answer_type != QuestionTypes.MultipleChoice:
-            raise ValueError(
-                f'related question has to be multiple choice but {self.related_question.answer_type} were given')
+            raise ValidationError(
+                {'error': f'related question has to be multiple choice but {self.related_question.answer_type} were given'})
         return super().save(*args, **kwargs)
 
     def __str__(self):
@@ -169,13 +212,13 @@ class MultipleChoiceAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if not self.related_question.choices.filter(title__exact=self.answer_field).exists():
-                raise ValueError('selected choice is not related to this question')
+                raise ValidationError({'error': 'selected choice is not related to this question'})
 
             if self.related_question.answer_type != QuestionTypes.MultipleChoice:
-                raise ValueError(
-                    f'answer type has to be {self.related_question.answer_type}, but Multiple Choice was given!')
+                raise ValidationError(
+                    {'error': f'answer type has to be {self.related_question.answer_type}, but Multiple Choice was given!'})
             return super().save(*args, **kwargs)
-        raise ValidationError('this question has been answered before in this response.')
+        raise ValidationError({'error': 'this question has been answered before in this response.'})
 
     @property
     def amount_of_choices(self):
@@ -193,7 +236,7 @@ class EmailFieldAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Email:
-                raise ValueError(f'answer type has to be {self.related_question.answer_type}, but Email was given!')
+                raise ValidationError(f'answer type has to be {self.related_question.answer_type}, but Email was given!')
             return super().save(*args, **kwargs)
         raise ValidationError('this question has been answered before in this response.')
 
@@ -209,7 +252,8 @@ class PhoneNumberFieldAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Phone_Number:
-                raise ValueError(f'answer type has to be {self.related_question.answer_type}, but Phone Number was given!')
+                raise ValidationError(
+                    f'answer type has to be {self.related_question.answer_type}, but Phone Number was given!')
             return super().save(*args, **kwargs)
         raise ValidationError('this question has been answered before in this response.')
 
@@ -225,7 +269,7 @@ class NumberFieldAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Number:
-                raise ValueError(f'answer type has to be {self.related_question.answer_type}, but Number was given!')
+                raise ValidationError(f'answer type has to be {self.related_question.answer_type}, but Number was given!')
             return super().save(*args, **kwargs)
         raise ValidationError('this question has been answered before in this response.')
 
@@ -241,7 +285,7 @@ class FileFieldAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.File:
-                raise ValueError(f'answer type has to be {self.related_question.answer_type}, but File was given!')
+                raise ValidationError(f'answer type has to be {self.related_question.answer_type}, but File was given!')
             return super().save(*args, **kwargs)
         raise ValidationError('this question has been answered before in this response.')
 
