@@ -1,1 +1,0 @@
-# write quiries to use them in views

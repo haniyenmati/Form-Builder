@@ -38,13 +38,21 @@ class Form(models.Model):
     owner_is_anonymous = models.BooleanField(default=True)
     is_closed = models.BooleanField(default=False)
 
-    def add_question(self, question):
+    @property
+    def question_bodies(self):
+        return self.questions.values_list('question_body', flat=True)
+
+    def add_question(self, question_data):
         try:
-            self.questions.add(question)
+            Question.objects.create(form_id=self.id, **question_data)
         except Exception as err:
-            raise ValidationError({"error": f'{err}'})
+            raise ValidationError({"error": err})
         else:
             return self.questions.all()
+
+    @property
+    def required_questions(self):
+        return self.questions.filter(is_required=True).values('id', 'question_body')
 
     def save(self, *args, **kwargs):
         """
@@ -88,6 +96,16 @@ class Question(models.Model):
             return self.objects.values(self.choices, question=F('question_body'))
         raise ValidationError({'error': 'non multi choice questions does not have this option'})
 
+    def change(self, **kwargs):
+        for key in kwargs:
+            try:
+                print(key, kwargs[key])
+                setattr(self, key, kwargs[key])
+            except Exception as error:
+                raise ValidationError(error)
+            else:
+                self.save()
+
 
 class Response(models.Model):
     related_form = models.ForeignKey(Form, on_delete=models.SET('deleted-form'), related_name='responses')
@@ -126,7 +144,7 @@ class Response(models.Model):
         return longs.union(shorts, multi_choices, emails, phone_nums, nums, files)
 
     @property
-    def all_answered_questions_body(self):
+    def all_answered_questions_id(self):
         return self.all_answers.values_list('question', flat=True)
 
     def save(self, *args, **kwargs):
@@ -146,7 +164,7 @@ class Answer(models.Model):
         return super().save(*args, **kwargs)
 
     def is_valid(self):
-        if self.related_question.id in self.related_response.all_answered_questions_body:
+        if self.related_question.id in self.related_response.all_answered_questions_id:
             return False  # it has been answered before in this response
         return True
 
@@ -180,7 +198,8 @@ class ShortAnswer(Answer):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Short:
                 raise ValidationError(
-                    {'error': f'answer type has to be {self.related_question.answer_type}, but Short Answer was given!'})
+                    {
+                        'error': f'answer type has to be {self.related_question.answer_type}, but Short Answer was given!'})
             return super().save(*args, **kwargs)
         raise ValidationError({'error': 'this question has been answered before in this response.'})
 
@@ -197,7 +216,8 @@ class Choices(models.Model):
     def save(self, *args, **kwargs):
         if self.related_question.answer_type != QuestionTypes.MultipleChoice:
             raise ValidationError(
-                {'error': f'related question has to be multiple choice but {self.related_question.answer_type} were given'})
+                {
+                    'error': f'related question has to be multiple choice but {self.related_question.answer_type} were given'})
         return super().save(*args, **kwargs)
 
     def __str__(self):
@@ -216,7 +236,8 @@ class MultipleChoiceAnswer(Answer):
 
             if self.related_question.answer_type != QuestionTypes.MultipleChoice:
                 raise ValidationError(
-                    {'error': f'answer type has to be {self.related_question.answer_type}, but Multiple Choice was given!'})
+                    {
+                        'error': f'answer type has to be {self.related_question.answer_type}, but Multiple Choice was given!'})
             return super().save(*args, **kwargs)
         raise ValidationError({'error': 'this question has been answered before in this response.'})
 
@@ -236,7 +257,8 @@ class EmailFieldAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Email:
-                raise ValidationError(f'answer type has to be {self.related_question.answer_type}, but Email was given!')
+                raise ValidationError(
+                    f'answer type has to be {self.related_question.answer_type}, but Email was given!')
             return super().save(*args, **kwargs)
         raise ValidationError('this question has been answered before in this response.')
 
@@ -269,7 +291,8 @@ class NumberFieldAnswer(Answer):
     def save(self, *args, **kwargs):
         if self.is_valid():
             if self.related_question.answer_type != QuestionTypes.Number:
-                raise ValidationError(f'answer type has to be {self.related_question.answer_type}, but Number was given!')
+                raise ValidationError(
+                    f'answer type has to be {self.related_question.answer_type}, but Number was given!')
             return super().save(*args, **kwargs)
         raise ValidationError('this question has been answered before in this response.')
 
