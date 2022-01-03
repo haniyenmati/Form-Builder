@@ -1,5 +1,6 @@
 from django.db import models, IntegrityError
 from django.utils.text import slugify
+from django.utils.timezone import timezone
 from django.db.models import F
 from django.core.validators import ValidationError
 from accounts.models import Business
@@ -64,7 +65,7 @@ class Form(models.Model):
             self.slug = slugify(f'{self.business.pk}-{self.title}')
             return super().save(*args, **kwargs)
         except IntegrityError:
-            raise ValidationError({"error": "a form with this title already exists in your forms list."})
+            raise ValidationError({"error": f"a form with this title({self.title}) already exists in your forms list."})
 
     def __str__(self):
         return self.slug
@@ -99,8 +100,24 @@ class Question(models.Model):
     def change(self, **kwargs):
         for key in kwargs:
             try:
-                print(key, kwargs[key])
-                setattr(self, key, kwargs[key])
+                if 'choices' in kwargs and self.answer_type == QuestionTypes.MultipleChoice:
+                    choices = kwargs.get('choices')
+                    for choice in choices:
+                        try:
+                            delete_tag = choice.pop('delete_tag')
+                        except:
+                            delete_tag = False
+
+                        if delete_tag:
+                            self.choices.get(title__exact=choice['title']).delete()
+
+                        else:
+                            try:
+                                Choices.objects.create(title=choice['title'], related_question=self)
+                            except Exception as error:
+                                raise ValidationError({"error": error})
+                else:
+                    setattr(self, key, kwargs[key])
             except Exception as error:
                 raise ValidationError(error)
             else:
@@ -110,6 +127,7 @@ class Question(models.Model):
 class Response(models.Model):
     related_form = models.ForeignKey(Form, on_delete=models.SET('deleted-form'), related_name='responses')
     owner_email = models.EmailField(null=True)
+    sent_date = models.DateTimeField(auto_now_add=True)
 
     @property
     def all_answers(self):
@@ -153,7 +171,7 @@ class Response(models.Model):
         return super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.owner_email
+        return f"{self.owner_email}"
 
 
 class Answer(models.Model):
@@ -218,6 +236,8 @@ class Choices(models.Model):
             raise ValidationError(
                 {
                     'error': f'related question has to be multiple choice but {self.related_question.answer_type} were given'})
+        elif self.title in self.related_question.choices.values_list('title', flat=True):
+            raise ValidationError('this choice already exists')
         return super().save(*args, **kwargs)
 
     def __str__(self):

@@ -1,5 +1,6 @@
 from django.core.validators import RegexValidator
 from django.db.models import TextChoices
+import pandas
 
 
 class PhoneNumberValidator:
@@ -16,3 +17,16 @@ class QuestionTypes(TextChoices):
     Number = 'number', "Number"
     File = 'file', "File"
 
+
+class JSONConvertor:
+    __exporting_files = "/home/haniye/Desktop/django-projects/Ayten/Form Builder Clone/Form-Builder/backend/media/exporting_files"
+
+    @classmethod
+    def convert(cls, json_input: str, saving_name, export_to):
+        try:
+            json_file = pandas.read_json(json_input)
+            getattr(json_file, f'to_{export_to}')(f'{cls.__exporting_files}/{saving_name}')
+        except Exception as err:
+            raise ValueError({'error': f'converting failed due to {err} '})
+        else:
+            return f'{cls.__exporting_files}/{saving_name}'

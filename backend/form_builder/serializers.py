@@ -1,3 +1,5 @@
+from abc import ABC
+
 from rest_framework import serializers
 from .models import *
 from django.db.transaction import atomic
@@ -20,7 +22,7 @@ class FormSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Form
-        fields = ['title', 'description', 'form_template', 'questions', 'owner_is_anonymous']
+        fields = ['title', 'description', 'form_template', 'questions', 'owner_is_anonymous', 'created_date']
 
 
 class FormRUDSerializer(serializers.ModelSerializer):
@@ -31,6 +33,8 @@ class FormRUDSerializer(serializers.ModelSerializer):
 
     class QuestionRUDSerializer(serializers.ModelSerializer):
         class ChoiceRUDSerializer(serializers.ModelSerializer):
+            delete_tag = serializers.BooleanField(required=False)
+
             class Meta:
                 model = Choices
                 fields = '__all__'
@@ -42,18 +46,39 @@ class FormRUDSerializer(serializers.ModelSerializer):
             model = Question
             exclude = ['form']
 
+        def update(self, instance: Question, validated_data):
+            if instance.answer_type == 'multi':
+                choices = validated_data.pop('choices')
+                if choices is not None:
+                    for choice in choices:
+                        try:
+                            delete_tag = choice.pop('delete_tag')
+                        except:
+                            raise serializers.ValidationError({'error': 'delete_tag is required'})
+
+                        choice['related_question'] = choice['related_question'].pk
+                        if delete_tag:
+                            instance.choices.get(title__exact=choice['title']).delete()
+
+                        else:
+                            new_choice = self.ChoiceRUDSerializer(data=choice)
+                            try:
+                                if new_choice.is_valid(raise_exception=True):
+                                    new_choice.save()
+                            except Exception as error:
+                                raise serializers.ValidationError({"error": error})
+                            return super().update(instance, validated_data)
+
     questions = QuestionRUDSerializer(many=True, required=False)
 
     class Meta:
         model = Form
-        fields = ['title', 'description', 'form_template', 'is_closed', 'questions']
+        fields = ['title', 'description', 'form_template', 'is_closed', 'questions', 'owner_is_anonymous']
 
     def update(self, instance: Form, validated_data):
         if 'questions' in validated_data:
             questions = validated_data.pop('questions')
-            print(questions)
             for question in questions:
-                print(question)
                 if not 'q_id' in question:
                     # create a new question and save it
                     instance.add_question(question)
@@ -62,7 +87,6 @@ class FormRUDSerializer(serializers.ModelSerializer):
                     question_id = question.pop('q_id')
                     changing_question = instance.questions.get(id=question_id)
                     changing_question.change(**question)
-
         return super().update(instance, validated_data)
 
 
@@ -98,6 +122,7 @@ class ResponseSerializer(serializers.ModelSerializer):
         save method has been defined atomic, to avoid saving responses that do not contain valid answers.
         and in case an answers creation process raises an exception, the response and other answers do not create as well.
         """
+
         if self.is_valid(raise_exception=True):
             data = self.validated_data
             answers = data.pop('all_answers')
@@ -143,5 +168,9 @@ class ResponseSerializer(serializers.ModelSerializer):
                         raise serializers.ValidationError("wrong question type. check the typo.")
 
                 except Exception as err:
-                    raise serializers.ValidationError(self.error_messages)
+                    raise serializers.ValidationError({"error": f"{err} is required"})
             return related_response
+
+
+class DownloadSerializer(serializers.Serializer):
+    format = serializers.CharField(max_length=32)

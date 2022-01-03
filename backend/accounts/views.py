@@ -27,10 +27,10 @@ class RegisterAPIView(GenericAPIView):
             new_business.save()
 
         else:
-            raise ValidationError(f'serializer is not valid due to {serializer.errors}')
+            raise ValidationError({"error": serializer.errors})
 
         return Response(data={
-            'id': new_business.pk,
+            'pk': new_business.pk,
             'user': new_user.username,
             'label': new_business.label,
             'registeration_date': new_business.registeration_date
